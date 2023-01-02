@@ -5,15 +5,16 @@ obj/boot/boot.out:     file format elf32-i386
 Disassembly of section .text:
 
 00007c00 <start>:
-.set CR0_PE_ON,      0x1         # protected mode enable flag
 
 .globl start
 start:
   .code16                     # Assemble for 16-bit mode
+  # 因为以下代码是在实模式下执行，所以要告诉编译器使用16位模式编译。
   cli                         # Disable interrupts
     7c00:	fa                   	cli    
   cld                         # String operations increment
     7c01:	fc                   	cld    
+  # 关中断，设置字符串操作是递增方向。cld的作用是将direct flag标志位清零，这意味着自动增加源索引和目标索引的指令(如MOVS)将同时增加它们。
 
   # Set up the important data segment registers (DS, ES, SS).
   xorw    %ax,%ax             # Segment number zero
@@ -26,10 +27,10 @@ start:
     7c08:	8e d0                	mov    %eax,%ss
 
 00007c0a <seta20.1>:
-  # Enable A20:
-  #   For backwards compatibility with the earliest PCs, physical
-  #   address line 20 is tied low, so that addresses higher than
-  #   1MB wrap around to zero by default.  This code undoes this.
+  # 好了，激活A20后，就可以访问所有4G内存了，就可以使用保护模式了。
+ 
+  # 怎么激活呢，由于历史原因A20地址位由键盘控制器芯片8042管理。所以要给8042发命令激活A20
+  # 8042有两个IO端口：0x60和0x64， 激活流程位： 发送0xd1命令到0x64端口 --> 发送0xdf到0x60，done！
 seta20.1:
   inb     $0x64,%al               # Wait for not busy
     7c0a:	e4 64                	in     $0x64,%al
@@ -37,6 +38,9 @@ seta20.1:
     7c0c:	a8 02                	test   $0x2,%al
   jnz     seta20.1
     7c0e:	75 fa                	jne    7c0a <seta20.1>
+
+# 发送命令之前，要等待键盘输入缓冲区为空，这通过8042的状态寄存器的第2bit来观察，而状态寄存器的值可以读0x64端口得到。
+# 上面的指令的意思就是，如果状态寄存器的第2位为1，就跳到seta20.1符号处执行，知道第2位为0，代表缓冲区为空
 
   movb    $0xd1,%al               # 0xd1 -> port 0x64
     7c10:	b0 d1                	mov    $0xd1,%al
