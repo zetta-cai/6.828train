@@ -105,13 +105,20 @@ boot_alloc(uint32_t n)
 	{
 		return nextfree;
 	}
-	else if (n > 0)
+
+	// note before update
+	result = nextfree;
+	nextfree = ROUNDUP(n, PGSIZE) + nextfree;
+
+	// out of memory panic
+	if (nextfree > (char *)0xf0400000)
 	{
-		result = nextfree;
-		nextfree += ROUNDUP(n, PGSIZE);
-		return result;
+		panic("boot_alloc: out of memory, nothing changed, returning NULL...\n");
+		nextfree = result; // reset static data
+		return NULL;
 	}
-	return NULL;
+
+	return result;
 }
 
 // Set up a two-level page table:
@@ -180,6 +187,8 @@ void mem_init(void)
 	//      (ie. perm = PTE_U | PTE_P)
 	//    - pages itself -- kernel RW, user NONE
 	// Your code goes here:
+	// Map 'pages' read-only by the user at linear address UPAGES
+	boot_map_region(kern_pgdir, UPAGES, npages * sizeof(struct PageInfo), PADDR(pages), PTE_U);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
@@ -192,6 +201,8 @@ void mem_init(void)
 	//       overwrite memory.  Known as a "guard page".
 	//     Permissions: kernel RW, user NONE
 	// Your code goes here:
+	// Use the physical memory that 'bootstack' refers to as the kernel
+	boot_map_region(kern_pgdir, KSTACKTOP - KSTKSIZE, KSTKSIZE, PADDR(bootstack), PTE_W);
 
 	//////////////////////////////////////////////////////////////////////
 	// Map all of physical memory at KERNBASE.
@@ -201,6 +212,8 @@ void mem_init(void)
 	// we just set up the mapping anyway.
 	// Permissions: kernel RW, user NONE
 	// Your code goes here:
+	// Map all of physical memory at KERNBASE.
+	boot_map_region(kern_pgdir, KERNBASE, 0xffffffff - KERNBASE, 0, PTE_W);
 
 	// Check that the initial page directory has been set up correctly.
 	check_kern_pgdir();
@@ -321,14 +334,14 @@ page_alloc(int alloc_flags)
 		return NULL;
 	}
 	pp = page_free_list;
-	page_free_list = page_free_list->pp_link;// update free list pointer
-	pp->pp_link = NULL; // set to NULL according to notes
+	page_free_list = page_free_list->pp_link; // update free list pointer
+	pp->pp_link = NULL;						  // set to NULL according to notes
 
 	// page2kva 返回值 KernelBase + 物理页号<<PGSHIFT,  虚拟地址
 
 	if (alloc_flags & ALLOC_ZERO)
 	{
-		void *va = page2kva(pp);  // extract kernel virtual memory
+		void *va = page2kva(pp); // extract kernel virtual memory
 		memset(va, '\0', PGSIZE);
 	}
 	return pp;
@@ -344,11 +357,12 @@ void page_free(struct PageInfo *pp)
 	// Fill this function in
 	// Hint: You may want to panic if pp->pp_ref is nonzero or
 	// pp->pp_link is not NULL.
-	if(pp->pp_link || pp->pp_ref) {
-        panic("pp->pp_ref is nonzero or pp->pp_link is not NULL\n");
-    }
+	if (pp->pp_link || pp->pp_ref)
+	{
+		panic("pp->pp_ref is nonzero or pp->pp_link is not NULL\n");
+	}
 	pp->pp_link = page_free_list;
-    page_free_list = pp;
+	page_free_list = pp;
 }
 
 //
@@ -382,12 +396,45 @@ void page_decref(struct PageInfo *pp)
 //
 // Hint 3: look at inc/mmu.h for useful macros that manipulate page
 // table and page directory entries.
-//
+// 给定一个页目录表指针 pgdir ，该函数应该返回线性地址va所对应的页表项指针。
+// pgdir_walk返回指向线性地址“ va”的页表项（PTE）的指针。这需要遍历两级页面表结构。
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
-	// Fill this function in
-	return NULL;
+	// 　1. 通过页目录表求得这个虚拟地址所在的页表页对于与页目录中的页目录项地址
+	uint32_t pdx = PDX(va); // 页目录项索引
+	uint32_t ptx = PTX(va); // 页表项索引
+	pde_t *pde;				// 页目录项指针
+	pte_t *pte;				// 页表项指针
+	struct PageInfo *pp;
+
+	pde = &pgdir[pdx]; // 获取页目录项
+	// 2. 判断这个页目录项对应的页表页是否已经在内存中。
+	if (*pde & PTE_P)
+	{
+		// 3. 如果在，计算这个页表页的基地址page_base，然后返回va所对应页表项的地址
+		// PTE_ADDR得到物理地址，KADDR转为虚拟地址
+		pte = (KADDR(PTE_ADDR(*pde)));
+	}
+	else
+	{
+		// 二级页表不存在，
+		if (!create)
+		{
+			return NULL;
+		}
+		// 4. 如果不在则，且create为true则分配新的页，并且把这个页的信息添加到页目录项pde中。
+		//  获取一页的内存，创建一个新的页表，来存放页表项
+		if (!(pp = page_alloc(ALLOC_ZERO)))
+		{
+			return NULL;
+		}
+		pte = (pte_t *)page2kva(pp);
+		pp->pp_ref++;
+		*pde = PADDR(pte) | (PTE_P | PTE_W | PTE_U); // 设置页目录项
+	}
+	// 返回页表项的虚拟地址
+	return &pte[ptx];
 }
 
 //
@@ -404,7 +451,15 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 static void
 boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm)
 {
-	// Fill this function in
+	size_t pgs = PAGE_ALIGN(size) >> PGSHIFT;// 计算总共有多少页
+	
+	for (int i = 0; i < pgs; i++, pa += PGSIZE, va += PGSIZE)// 更新pa和va，进行下一轮循环
+	{
+		pte_t *pte = pgdir_walk(pgdir, (void *)va, 1);// 获取va对应的PTE的地址 create if not exists
+		if (pte == NULL)
+			panic("boot_map_region(): out of memory\n");
+		*pte = pa | PTE_P | perm;// 修改va对应的PTE的值
+	}
 }
 
 //
@@ -434,7 +489,22 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 //
 int page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
-	// Fill this function in
+	// 1. 首先通过pgdir_walk函数求出虚拟地址va所对应的页表项。 如果没有 分配一个
+	pte_t *pte = pgdir_walk(pgdir, va, 1);
+	if (!pte)
+	{
+		return -E_NO_MEM; // 错误是负数
+	}
+	// 2. 修改pp_ref的值。 要先加再去判断是不是映射过了，因为3中涉及到了删除
+	pp->pp_ref++;
+	// 3. 查看这个页表项，确定va是否已经被映射，如果被映射，则删除这个映射。
+	if ((*pte) & PTE_P) // If this virtual address is already mapped. 先删掉
+	{
+		page_remove(pgdir, va);
+	}
+	// 4. 把va和pp之间的映射关系加入到页表项中。
+	*pte = (page2pa(pp) | perm | PTE_P);
+	pgdir[PDX(va)] |= perm; // Remember this step!
 	return 0;
 }
 
@@ -452,8 +522,17 @@ int page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
-	// Fill this function in
-	return NULL;
+	pte_t *pte = pgdir_walk(pgdir, va, 0);
+	if (pte == NULL) // no page mapped at va
+		return NULL;
+	if (!(*pte & PTE_P)) // 考虑页表项是否存在
+		return NULL;
+	if (pte_store)
+	{
+		*pte_store = pte;
+	}
+	struct PageInfo *ret = pa2page(PTE_ADDR(*pte));
+	return ret;
 }
 
 //
@@ -474,6 +553,14 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void page_remove(pde_t *pgdir, void *va)
 {
 	// Fill this function in
+	pte_t *pte;
+	struct PageInfo *pageInfo = page_lookup(pgdir, va, &pte); // PageInfo
+	if (pageInfo == NULL)
+		return; // page not mapped
+
+	page_decref(pageInfo); // 减少引用，如果为0，free
+	*pte = 0;			   // set pte not present
+	tlb_invalidate(pgdir, va);
 }
 
 //
