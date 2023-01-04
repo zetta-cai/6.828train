@@ -45,13 +45,14 @@
 #define NPDENTRIES	1024		// page directory entries per page directory
 #define NPTENTRIES	1024		// page table entries per page table
 
+#define PGSIZE		4096		// bytes mapped by a page
 #define PGSHIFT		12		// log2(PGSIZE)
-#define PGSIZE		(1<<PGSHIFT)	// bytes mapped by a page
 
 #define PAGE_ALIGN(addr)       _ALIGN(addr, PGSIZE) //页对齐
 #define _ALIGN(addr,size)     _ALIGN_UP(addr,size)
 #define _ALIGN_UP(addr,size)    (((addr)+((size)-1))&(~((size)-1)))
 #define _ALIGN_DOWN(addr,size)     ((addr)&(~((size)-1)))
+
 
 #define PTSIZE		(PGSIZE*NPTENTRIES) // bytes mapped by a page directory entry
 #define PTSHIFT		22		// log2(PTSIZE)
