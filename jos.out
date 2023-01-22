@@ -8,6 +8,13 @@ check_page() succeeded!
 check_kern_pgdir() succeeded!
 check_page_free_list() succeeded!
 check_page_installed_pgdir() succeeded!
+0-2 1-2 2-1 3-1 4-1 5-2 6-2 7-0 8-0 9-1 10-31 
+0-2 1-2 2-1 3-1 4-1 5-2 6-2 7-1 8-1 9-0 10-31 
+0-2 1-2 2-1 3-1 4-1 5-2 6-2 7-2 8-1 9-0 10-31 
+0-2 1-2 2-1 3-1 4-1 5-2 6-2 7-2 8-0 9-0 10-31 
+0-2 1-2 2-1 3-1 4-1 5-2 6-2 7-2 8-1 9-0 10-31 
+0-2 1-2 2-1 3-1 4-1 5-2 6-2 7-2 8-1 9-0 10-31 
+check_malloc_and_free() succeeded!
 Welcome to the JOS kernel monitor!
 Type 'help' for a list of commands.
-qemu: terminating on signal 15 from pid 9774
+qemu: terminating on signal 15 from pid 14396

@@ -59,6 +59,8 @@
 #define PTXSHIFT	12		// offset of PTX in a linear address
 #define PDXSHIFT	22		// offset of PDX in a linear address
 
+#define MAX_ORDER 10 		// log2(max continuous page frame number(1024) permitted to allocate)
+
 // Page table/directory entry flags.
 #define PTE_P		0x001	// Present
 #define PTE_W		0x002	// Writeable
